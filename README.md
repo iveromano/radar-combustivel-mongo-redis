@@ -16,8 +16,8 @@ Radar Combustível.
 
 📦 **Escopo e Entregáveis**  
 A solução contempla os seguintes componentes:  
- . Modelagem do caso Radar Combustível, com entidades, eventos e consultas coerentes;  
- . Implementação do pipeline MongoDB → Redis, orientado a eventos;  
- . Uso adequado de estruturas de dados do Redis (Hashes, Sorted Sets, Geo, Time Series);  
- . Camada de visualização para consulta das métricas servidas pelo Redis;  
- . Documentação da arquitetura, decisões técnicas e instruções de execução.
+ - Modelagem do caso Radar Combustível, com entidades, eventos e consultas coerentes;  
+ - Implementação do pipeline MongoDB → Redis, orientado a eventos;  
+ - Uso adequado de estruturas de dados do Redis (Hashes, Sorted Sets, Geo, Time Series);  
+ - Camada de visualização para consulta das métricas servidas pelo Redis;  
+ - Documentação da arquitetura, decisões técnicas e instruções de execução.
