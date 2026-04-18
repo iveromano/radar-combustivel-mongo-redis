@@ -5,16 +5,16 @@
 Este projeto implementa um pipeline de dados em tempo quase real utilizando MongoDB como fonte de eventos
 e Redis como camada de serving, aplicado ao caso da plataforma Radar Combustível.
 
-📘 Contexto acadêmico
+📘 Contexto acadêmico  
 Projeto desenvolvido em grupo como desafio final da disciplina **In-Memory Database**
 do **MBA em Tecnologia – FIAP**.
 
-🎯 **Objetivo do trabalho**
+🎯 **Objetivo do trabalho**  
 Projetar e implementar, em grupo, um pipeline de dados em tempo quase real utilizando
 MongoDB como fonte de eventos e Redis como camada de serving, aplicado ao caso da plataforma
 Radar Combustível.
 
-📦 **Escopo e Entregáveis**
+📦 **Escopo e Entregáveis**  
 A solução contempla os seguintes componentes:  <br>
   Modelagem do caso Radar Combustível, com entidades, eventos e consultas coerentes;<br>
   Implementação do pipeline MongoDB → Redis, orientado a eventos;<br>
