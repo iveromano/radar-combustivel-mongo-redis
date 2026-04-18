@@ -1,3 +1,6 @@
+🇧🇷 Este README está em Português.
+🇺🇸 For the English version, see README.en.md
+
 # Radar Combustível — Pipeline de Dados em Tempo Quase Real (MongoDB → Redis)
 Este projeto implementa um pipeline de dados em tempo quase real utilizando MongoDB como fonte de eventos
 e Redis como camada de serving, aplicado ao caso da plataforma Radar Combustível.
