@@ -1,5 +1,4 @@
 🇧🇷 Este README está em Português.
-
 🇺🇸 For the English version, see README.en.md
 
 # Radar Combustível — Pipeline de Dados em Tempo Quase Real (MongoDB → Redis)
