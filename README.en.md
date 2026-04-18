@@ -10,7 +10,7 @@ of the **MBA in Technology – FIAP**.
 🎯 **Project Objective**  
 To design and implement, as a group, a near real-time data pipeline using MongoDB as an event source
 and Redis as the serving layer, applied to the Radar Combustível platform use case.
-
+<br><br>
 📦 **Scope and Deliverables**  
 The solution includes the following components:
 - Modeling of the Radar Combustível use case, with coherent entities, events, and queries;
