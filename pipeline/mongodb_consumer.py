@@ -1,3 +1,5 @@
+# mongodb_consumer.py
+
 import argparse
 import os
 import time
@@ -12,7 +14,6 @@ from redis.exceptions import ResponseError
 # ENVIRONMENT
 # =========================================================
 
-# Load .env.local first (for host development)
 load_dotenv(".env.local")
 load_dotenv()
 
@@ -21,27 +22,42 @@ MONGO_URI = os.getenv(
     "mongodb://localhost:27017/?directConnection=true",
 )
 
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_HOST = os.getenv(
+    "REDIS_HOST",
+    "localhost",
+)
+
+REDIS_PORT = int(
+    os.getenv(
+        "REDIS_PORT",
+        "6379",
+    )
+)
 
 DB_NAME = "radar_combustivel"
 
-# Mongo collections
 COL_EVENTOS_PRECO = "eventos_preco"
 COL_AVALIACOES = "avaliacoes_interacoes"
 COL_BUSCAS = "buscas_usuarios"
-COL_POSTOS = "postos"
 
 # =========================================================
-# HELPERS
+# REDIS HELPERS
 # =========================================================
 
-def posto_hash_key(posto_id: str) -> str:
+def posto_key(posto_id: str) -> str:
+
     return f"posto:{posto_id}"
 
 
-def ts_key(posto_id: str, metric: str) -> str:
-    return f"ts:posto:{posto_id}:{metric}"
+def timeseries_key(
+    posto_id: str,
+    combustivel: str,
+) -> str:
+
+    return (
+        f"ts:posto:{posto_id}:"
+        f"{combustivel}"
+    )
 
 
 def ensure_ts_add(
@@ -63,15 +79,7 @@ def ensure_ts_add(
             "LAST",
         )
 
-    except ResponseError as exc:
-
-        msg = str(exc)
-
-        if (
-            "key does not exist" not in msg
-            and "TSDB: the key does not exist" not in msg
-        ):
-            raise
+    except ResponseError:
 
         redis.execute_command(
             "TS.CREATE",
@@ -81,7 +89,14 @@ def ensure_ts_add(
             "DUPLICATE_POLICY",
             "LAST",
             "LABELS",
-            *sum(([k, v] for k, v in labels.items()), []),
+            *sum(
+                (
+                    [k, v]
+                    for k, v
+                    in labels.items()
+                ),
+                [],
+            ),
         )
 
         redis.execute_command(
@@ -93,253 +108,433 @@ def ensure_ts_add(
             "LAST",
         )
 
-
 # =========================================================
-# EVENT NORMALIZATION
+# NORMALIZATION
 # =========================================================
 
-def normalize_price_event(raw: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_price_event(
+    raw: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    combustivel = str(
+        raw.get(
+            "combustivel",
+            "",
+        )
+    ).lower()
 
     return {
-        "event_type": "price_update",
-        "posto_id": str(raw["posto_id"]),
-        "combustivel": raw.get("combustivel"),
-        "preco_novo": float(raw.get("preco_novo", 0)),
-        "variacao_pct": float(raw.get("variacao_pct", 0)),
-        "fonte": raw.get("fonte", ""),
-        "ts": int(raw["ocorrido_em"].timestamp() * 1000),
+
+        "type": "price_update",
+
+        "posto_id": str(
+            raw["posto_id"]
+        ),
+
+        "combustivel": combustivel,
+
+        "preco_novo": float(
+            raw.get(
+                "preco_novo",
+                0,
+            )
+        ),
+
+        "variacao_pct": float(
+            raw.get(
+                "variacao_pct",
+                0,
+            )
+        ),
+
+        "ts": int(
+            raw["ocorrido_em"]
+            .timestamp() * 1000
+        ),
     }
 
 
-def normalize_rating_event(raw: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_rating_event(
+    raw: Dict[str, Any],
+) -> Dict[str, Any]:
 
     return {
-        "event_type": "rating",
-        "posto_id": str(raw["posto_id"]),
-        "nota": raw.get("nota"),
-        "tipo": raw.get("tipo"),
-        "util_count": int(raw.get("util_count", 0)),
-        "ts": int(raw["created_at"].timestamp() * 1000),
+
+        "type": str(
+            raw.get(
+                "tipo",
+                "",
+            )
+        ).lower(),
+
+        "posto_id": str(
+            raw["posto_id"]
+        ),
+
+        "nota": raw.get(
+            "nota"
+        ),
+
+        "ts": int(
+            raw["created_at"]
+            .timestamp() * 1000
+        ),
     }
 
 
-def normalize_search_event(raw: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_search_event(
+    raw: Dict[str, Any],
+) -> Dict[str, Any]:
 
     return {
-        "event_type": "search",
-        "cidade": raw.get("cidade"),
-        "estado": raw.get("estado"),
-        "tipo_combustivel": raw.get("tipo_combustivel"),
-        "resultado_count": int(raw.get("resultado_count", 0)),
-        "latencia_ms": int(raw.get("latencia_ms", 0)),
-        "ts": int(raw["consultado_em"].timestamp() * 1000),
+
+        "type": "search",
+
+        "bairro": raw.get(
+            "bairro",
+            "desconhecido",
+        ),
+
+        "cidade": raw.get(
+            "cidade",
+            "",
+        ),
+
+        "estado": raw.get(
+            "estado",
+            "",
+        ),
+
+        "combustivel": str(
+            raw.get(
+                "tipo_combustivel",
+                "",
+            )
+        ).lower(),
+
+        "latencia_ms": int(
+            raw.get(
+                "latencia_ms",
+                0,
+            )
+        ),
+
+        "resultado_count": int(
+            raw.get(
+                "resultado_count",
+                0,
+            )
+        ),
+
+        "ts": int(
+            raw["consultado_em"]
+            .timestamp() * 1000
+        ),
     }
 
-
 # =========================================================
-# REDIS APPLY
+# APPLY EVENTS
 # =========================================================
 
-def apply_price_event(redis: Redis, event: Dict[str, Any]) -> None:
+def apply_price_event(
+    redis: Redis,
+    event: Dict[str, Any],
+) -> None:
 
-    r_hash = posto_hash_key(event["posto_id"])
+    posto_id = event["posto_id"]
 
-    fuel_field = event["combustivel"].lower()
+    combustivel = (
+        event["combustivel"]
+    )
+
+    preco = (
+        event["preco_novo"]
+    )
+
+    variacao = abs(
+        event["variacao_pct"]
+    )
+
+    ts = event["ts"]
+
+    hash_key = posto_key(
+        posto_id
+    )
+
+    bairro = redis.hget(
+        hash_key,
+        "bairro",
+    )
+
+    if not bairro:
+        bairro = "desconhecido"
+
+    # =====================================================
+    # HASH
+    # =====================================================
 
     redis.hset(
-        r_hash,
-        fuel_field,
-        event["preco_novo"],
+        hash_key,
+        combustivel,
+        preco,
     )
 
-    # ranking combustível mais barato
+    # =====================================================
+    # RANKING MENOR PREÇO POR BAIRRO
+    # =====================================================
+
     redis.zadd(
-        f"ranking:combustivel:{fuel_field}:menor_preco",
-        {event["posto_id"]: event["preco_novo"]},
+        f"ranking:preco:{combustivel}:{bairro}",
+        {
+            posto_id: preco
+        },
     )
 
-    # ranking maior queda
+    # =====================================================
+    # MAIOR VARIAÇÃO
+    # =====================================================
+
     redis.zadd(
-        f"ranking:combustivel:{fuel_field}:maior_queda",
-        {event["posto_id"]: abs(event["variacao_pct"])},
+        f"ranking:variacao:{combustivel}",
+        {
+            posto_id: variacao
+        },
     )
+
+    # =====================================================
+    # TIMESERIES
+    # =====================================================
 
     ensure_ts_add(
         redis,
-        ts_key(event["posto_id"], "price_updates"),
-        event["ts"],
-        event["preco_novo"],
+        timeseries_key(
+            posto_id,
+            combustivel,
+        ),
+        ts,
+        preco,
         {
-            "posto_id": event["posto_id"],
-            "metric": "price_updates",
+            "posto_id": posto_id,
+            "combustivel": combustivel,
         },
     )
 
     print(
-        f"[REDIS] PRICE UPDATE | "
-        f"{event['posto_id']} | "
-        f"{fuel_field} = {event['preco_novo']}"
+        "[PRICE]"
+        f" posto={posto_id}"
+        f" combustivel={combustivel}"
+        f" preco={preco}"
     )
 
 
-def apply_rating_event(redis: Redis, event: Dict[str, Any]) -> None:
+def apply_rating_event(
+    redis: Redis,
+    event: Dict[str, Any],
+) -> None:
 
-    r_hash = posto_hash_key(event["posto_id"])
+    posto_id = event[
+        "posto_id"
+    ]
 
-    # compartilhamento
-    if event["tipo"] == "compartilhamento":
+    event_type = event[
+        "type"
+    ]
 
-        shares = redis.hincrby(r_hash, "shares", 1)
+    hash_key = posto_key(
+        posto_id
+    )
+
+    # =====================================================
+    # SHARE
+    # =====================================================
+
+    if event_type == "compartilhamento":
+
+        shares = redis.hincrby(
+            hash_key,
+            "shares",
+            1,
+        )
 
         redis.zadd(
             "ranking:postos:shares",
-            {event["posto_id"]: shares},
-        )
-
-        ensure_ts_add(
-            redis,
-            ts_key(event["posto_id"], "shares"),
-            event["ts"],
-            shares,
             {
-                "posto_id": event["posto_id"],
-                "metric": "shares",
+                posto_id: shares
             },
         )
 
         print(
-            f"[REDIS] SHARE | "
-            f"{event['posto_id']} | "
-            f"shares={shares}"
+            "[SHARE]"
+            f" posto={posto_id}"
+            f" total={shares}"
         )
 
         return
 
-    # avaliação
-    nota = event.get("nota")
+    # =====================================================
+    # AVALIAÇÃO
+    # =====================================================
 
-    if nota is not None:
+    nota = event.get(
+        "nota"
+    )
 
-        redis.hincrbyfloat(
-            r_hash,
-            "rating_sum",
-            float(nota),
-        )
+    if nota is None:
+        return
 
-        redis.hincrby(
-            r_hash,
-            "rating_count",
-            1,
-        )
+    redis.hincrbyfloat(
+        hash_key,
+        "rating_sum",
+        float(nota),
+    )
 
-        rating_sum = float(
-            redis.hget(r_hash, "rating_sum") or 0
-        )
-
-        rating_count = int(
-            redis.hget(r_hash, "rating_count") or 1
-        )
-
-        avg = round(
-            rating_sum / max(rating_count, 1),
-            2,
-        )
-
-        redis.hset(
-            r_hash,
-            "media_avaliacao",
-            avg,
-        )
-
-        redis.zadd(
-            "ranking:postos:avaliacao",
-            {event["posto_id"]: avg},
-        )
-
-        print(
-            f"[REDIS] RATING | "
-            f"{event['posto_id']} | "
-            f"avg={avg}"
-        )
-
-
-def apply_search_event(redis: Redis, event: Dict[str, Any]) -> None:
-
-    fuel = event["tipo_combustivel"]
-
-    # ranking combustível mais buscado
-    score = redis.zincrby(
-        "ranking:combustivel:buscas",
+    redis.hincrby(
+        hash_key,
+        "rating_count",
         1,
-        fuel,
     )
 
-    # analytics por cidade
-    city_key = (
-        f"analytics:buscas:{event['estado']}:{event['cidade']}"
+    rating_sum = float(
+        redis.hget(
+            hash_key,
+            "rating_sum",
+        ) or 0
     )
 
-    redis.hincrby(city_key, fuel, 1)
+    rating_count = int(
+        redis.hget(
+            hash_key,
+            "rating_count",
+        ) or 1
+    )
+
+    media = round(
+        rating_sum /
+        max(rating_count, 1),
+        2,
+    )
+
+    redis.hset(
+        hash_key,
+        "media_avaliacao",
+        media,
+    )
+
+    redis.zadd(
+        "ranking:postos:avaliacao",
+        {
+            posto_id: media
+        },
+    )
 
     print(
-        f"[REDIS] SEARCH | "
-        f"{fuel} | "
-        f"score={int(float(score))}"
+        "[RATING]"
+        f" posto={posto_id}"
+        f" media={media}"
     )
 
 
+def apply_search_event(
+    redis: Redis,
+    event: Dict[str, Any],
+) -> None:
+
+    combustivel = (
+        event["combustivel"]
+    )
+
+    bairro = (
+        event["bairro"]
+    )
+
+    cidade = (
+        event["cidade"]
+    )
+
+    estado = (
+        event["estado"]
+    )
+
+    # =====================================================
+    # COMBUSTÍVEL MAIS BUSCADO
+    # =====================================================
+
+    redis.zincrby(
+        "ranking:combustivel:buscas",
+        1,
+        combustivel,
+    )
+
+    # =====================================================
+    # BAIRRO MAIS BUSCADO
+    # =====================================================
+
+    redis.zincrby(
+        "ranking:buscas:bairro",
+        1,
+        bairro,
+    )
+
+    # =====================================================
+    # ANALYTICS LOCAL
+    # =====================================================
+
+    redis.hincrby(
+        (
+            f"analytics:buscas:"
+            f"{estado}:{cidade}"
+        ),
+        combustivel,
+        1,
+    )
+
+    print(
+        "[SEARCH]"
+        f" combustivel={combustivel}"
+        f" bairro={bairro}"
+    )
+
 # =========================================================
-# EVENT HANDLERS
+# HANDLERS
 # =========================================================
 
 def handle_price_event(
     redis: Redis,
-    raw_event: Dict[str, Any],
+    raw: Dict[str, Any],
 ) -> None:
 
-    event = normalize_price_event(raw_event)
-
-    print(
-        f"[EVENT] PRICE_UPDATE | "
-        f"{event['posto_id']} | "
-        f"{event['combustivel']} | "
-        f"{event['preco_novo']}"
+    apply_price_event(
+        redis,
+        normalize_price_event(
+            raw
+        ),
     )
-
-    apply_price_event(redis, event)
 
 
 def handle_rating_event(
     redis: Redis,
-    raw_event: Dict[str, Any],
+    raw: Dict[str, Any],
 ) -> None:
 
-    event = normalize_rating_event(raw_event)
-
-    print(
-        f"[EVENT] RATING | "
-        f"{event['posto_id']} | "
-        f"{event['tipo']}"
+    apply_rating_event(
+        redis,
+        normalize_rating_event(
+            raw
+        ),
     )
-
-    apply_rating_event(redis, event)
 
 
 def handle_search_event(
     redis: Redis,
-    raw_event: Dict[str, Any],
+    raw: Dict[str, Any],
 ) -> None:
 
-    event = normalize_search_event(raw_event)
-
-    print(
-        f"[EVENT] SEARCH | "
-        f"{event['tipo_combustivel']} | "
-        f"{event['cidade']}"
+    apply_search_event(
+        redis,
+        normalize_search_event(
+            raw
+        ),
     )
-
-    apply_search_event(redis, event)
-
 
 # =========================================================
 # BACKFILL
@@ -353,59 +548,64 @@ def backfill_existing(
 
     processed = 0
 
-    # -----------------------------------------------------
+    # =====================================================
     # PREÇOS
-    # -----------------------------------------------------
-
-    col_precos = mongo[DB_NAME][COL_EVENTOS_PRECO]
+    # =====================================================
 
     for doc in (
-        col_precos.find({})
+        mongo[DB_NAME][COL_EVENTOS_PRECO]
+        .find({})
         .sort("ocorrido_em", 1)
         .limit(limit)
     ):
 
-        handle_price_event(redis, doc)
+        handle_price_event(
+            redis,
+            doc,
+        )
 
         processed += 1
 
-    # -----------------------------------------------------
+    # =====================================================
     # AVALIAÇÕES
-    # -----------------------------------------------------
-
-    col_avaliacoes = mongo[DB_NAME][COL_AVALIACOES]
+    # =====================================================
 
     for doc in (
-        col_avaliacoes.find({})
+        mongo[DB_NAME][COL_AVALIACOES]
+        .find({})
         .sort("created_at", 1)
         .limit(limit)
     ):
 
-        handle_rating_event(redis, doc)
+        handle_rating_event(
+            redis,
+            doc,
+        )
 
         processed += 1
 
-    # -----------------------------------------------------
+    # =====================================================
     # BUSCAS
-    # -----------------------------------------------------
-
-    col_buscas = mongo[DB_NAME][COL_BUSCAS]
+    # =====================================================
 
     for doc in (
-        col_buscas.find({})
+        mongo[DB_NAME][COL_BUSCAS]
+        .find({})
         .sort("consultado_em", 1)
         .limit(limit)
     ):
 
-        handle_search_event(redis, doc)
+        handle_search_event(
+            redis,
+            doc,
+        )
 
         processed += 1
 
     print(
-        f"[CONSUMER] Backfill concluído: "
-        f"{processed} eventos."
+        "[BACKFILL]"
+        f" eventos={processed}"
     )
-
 
 # =========================================================
 # MAIN
@@ -413,22 +613,18 @@ def backfill_existing(
 
 def main() -> None:
 
-    parser = argparse.ArgumentParser(
-        description=(
-            "Consome eventos do MongoDB "
-            "e publica no Redis."
-        )
-    )
+    parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--skip-backfill",
         action="store_true",
-        help="Não processa eventos já existentes.",
     )
 
     args = parser.parse_args()
 
-    mongo = MongoClient(MONGO_URI)
+    mongo = MongoClient(
+        MONGO_URI
+    )
 
     redis = Redis(
         host=REDIS_HOST,
@@ -436,65 +632,125 @@ def main() -> None:
         decode_responses=True,
     )
 
-    if not args.skip_backfill:
-        backfill_existing(mongo, redis)
+    # =====================================================
+    # BACKFILL
+    # =====================================================
 
-    print("[CONSUMER] MongoDB Change Streams conectados")
-    print("[CONSUMER] Aguardando eventos...")
+    if not args.skip_backfill:
+
+        backfill_existing(
+            mongo,
+            redis,
+        )
+
+    print(
+        "[CONSUMER] Change Streams ativos"
+    )
+
+    # =====================================================
+    # STREAM LOOP
+    # =====================================================
 
     while True:
 
         try:
 
-            col_precos = mongo[DB_NAME][COL_EVENTOS_PRECO]
-            col_avaliacoes = mongo[DB_NAME][COL_AVALIACOES]
-            col_buscas = mongo[DB_NAME][COL_BUSCAS]
+            col_precos = (
+                mongo[DB_NAME]
+                [COL_EVENTOS_PRECO]
+            )
+
+            col_avaliacoes = (
+                mongo[DB_NAME]
+                [COL_AVALIACOES]
+            )
+
+            col_buscas = (
+                mongo[DB_NAME]
+                [COL_BUSCAS]
+            )
 
             with col_precos.watch(
-                [{"$match": {"operationType": "insert"}}],
+                [
+                    {
+                        "$match": {
+                            "operationType": "insert"
+                        }
+                    }
+                ],
                 full_document="updateLookup",
             ) as stream_precos, \
                  col_avaliacoes.watch(
-                     [{"$match": {"operationType": "insert"}}],
+                     [
+                         {
+                             "$match": {
+                                 "operationType": "insert"
+                             }
+                         }
+                     ],
                      full_document="updateLookup",
                  ) as stream_avaliacoes, \
                  col_buscas.watch(
-                     [{"$match": {"operationType": "insert"}}],
+                     [
+                         {
+                             "$match": {
+                                 "operationType": "insert"
+                             }
+                         }
+                     ],
                      full_document="updateLookup",
                  ) as stream_buscas:
 
                 while True:
 
-                    for change in stream_precos.try_next(),:
+                    change = (
+                        stream_precos.try_next()
+                    )
 
-                        if change:
-                            handle_price_event(
-                                redis,
-                                change["fullDocument"],
-                            )
+                    if change:
 
-                    for change in stream_avaliacoes.try_next(),:
+                        handle_price_event(
+                            redis,
+                            change[
+                                "fullDocument"
+                            ],
+                        )
 
-                        if change:
-                            handle_rating_event(
-                                redis,
-                                change["fullDocument"],
-                            )
+                    change = (
+                        stream_avaliacoes
+                        .try_next()
+                    )
 
-                    for change in stream_buscas.try_next(),:
+                    if change:
 
-                        if change:
-                            handle_search_event(
-                                redis,
-                                change["fullDocument"],
-                            )
+                        handle_rating_event(
+                            redis,
+                            change[
+                                "fullDocument"
+                            ],
+                        )
+
+                    change = (
+                        stream_buscas
+                        .try_next()
+                    )
+
+                    if change:
+
+                        handle_search_event(
+                            redis,
+                            change[
+                                "fullDocument"
+                            ],
+                        )
 
                     time.sleep(0.2)
 
         except Exception as exc:
 
             print(
-                f"[CONSUMER] Reconectando após erro: {exc}"
+                "[CONSUMER ERROR]",
+                exc,
             )
 
             time.sleep(2)
