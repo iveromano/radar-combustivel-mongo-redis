@@ -50,17 +50,17 @@ def posto_nome(
     return nome or posto_id
 
 
-def posto_bandeira(
+def posto_bairro(
     redis: Redis,
     posto_id: str,
 ) -> str:
 
-    bandeira = redis.hget(
+    bairro = redis.hget(
         f"posto:{posto_id}",
-        "bandeira",
+        "bairro",
     )
 
-    return bandeira or "-"
+    return bairro or "-"
 
 
 def posto_cidade(
@@ -77,36 +77,33 @@ def posto_cidade(
 
 
 # =========================================================
-# RANKINGS
+# CONSULTAS PRINCIPAIS
 # =========================================================
 
-def top_postos_avaliados(
+# ---------------------------------------------------------
+# 1. POSTOS MAIS BARATOS POR REGIÃO
+# ---------------------------------------------------------
+
+def postos_mais_baratos(
     redis: Redis,
+    combustivel: str,
+    bairro: str,
     n: int = 10,
 ) -> List[Tuple[str, float]]:
 
-    return redis.zrevrange(
-        "ranking:postos:avaliacao",
+    return redis.zrange(
+        f"ranking:preco:{combustivel}:{bairro}",
         0,
         n - 1,
         withscores=True,
     )
 
 
-def top_postos_compartilhados(
-    redis: Redis,
-    n: int = 10,
-) -> List[Tuple[str, float]]:
+# ---------------------------------------------------------
+# 2. COMBUSTÍVEIS EM ALTA
+# ---------------------------------------------------------
 
-    return redis.zrevrange(
-        "ranking:postos:shares",
-        0,
-        n - 1,
-        withscores=True,
-    )
-
-
-def combustiveis_mais_buscados(
+def combustiveis_em_alta(
     redis: Redis,
     n: int = 5,
 ) -> List[Tuple[str, float]]:
@@ -119,13 +116,35 @@ def combustiveis_mais_buscados(
     )
 
 
-def gasolina_mais_barata(
+# ---------------------------------------------------------
+# 3. BAIRROS COM MAIS BUSCAS
+# ---------------------------------------------------------
+
+def bairros_mais_buscados(
     redis: Redis,
     n: int = 10,
 ) -> List[Tuple[str, float]]:
 
-    return redis.zrange(
-        "ranking:combustivel:gasolina_comum:menor_preco",
+    return redis.zrevrange(
+        "ranking:buscas:bairro",
+        0,
+        n - 1,
+        withscores=True,
+    )
+
+
+# ---------------------------------------------------------
+# 4. MAIOR VARIAÇÃO DE PREÇO
+# ---------------------------------------------------------
+
+def maior_variacao_preco(
+    redis: Redis,
+    combustivel: str,
+    n: int = 10,
+) -> List[Tuple[str, float]]:
+
+    return redis.zrevrange(
+        f"ranking:variacao:{combustivel}",
         0,
         n - 1,
         withscores=True,
@@ -136,46 +155,19 @@ def gasolina_mais_barata(
 # REDISEARCH
 # =========================================================
 
-def top_rated_postos(
-    redis: Redis,
-    n: int = 10,
-):
-
-    query = (
-        Query("*")
-        .sort_by(
-            "media_avaliacao",
-            asc=False,
-        )
-        .paging(0, n)
-    )
-
-    return redis.ft(
-        "idx:postos"
-    ).search(query)
-
-
 def search_postos(
     redis: Redis,
-    bandeira: str,
-    estado: str,
-    min_rating: float,
-    max_gasolina: float,
+    bairro: str,
+    combustivel_max: float,
     limit: int,
 ):
 
     query_parts = []
 
-    if bandeira.strip():
+    if bairro.strip():
 
         query_parts.append(
-            f"@bandeira:{{{bandeira}}}"
-        )
-
-    if estado.strip():
-
-        query_parts.append(
-            f"@estado:{{{estado}}}"
+            f"@bairro:{{{bairro}}}"
         )
 
     query_text = (
@@ -188,16 +180,9 @@ def search_postos(
         Query(query_text)
         .add_filter(
             NumericFilter(
-                "media_avaliacao",
-                min_rating,
-                5,
-            )
-        )
-        .add_filter(
-            NumericFilter(
                 "gasolina_comum",
                 0,
-                max_gasolina,
+                combustivel_max,
             )
         )
         .sort_by(
@@ -219,10 +204,11 @@ def search_postos(
 def price_series(
     redis: Redis,
     posto_id: str,
+    combustivel: str,
 ):
 
     key = (
-        f"ts:posto:{posto_id}:price_updates"
+        f"ts:posto:{posto_id}:{combustivel}"
     )
 
     return redis.execute_command(
@@ -232,26 +218,6 @@ def price_series(
         "+",
         "AGGREGATION",
         "avg",
-        "60000",
-    )
-
-
-def shares_series(
-    redis: Redis,
-    posto_id: str,
-):
-
-    key = (
-        f"ts:posto:{posto_id}:shares"
-    )
-
-    return redis.execute_command(
-        "TS.RANGE",
-        key,
-        "-",
-        "+",
-        "AGGREGATION",
-        "sum",
         "60000",
     )
 
@@ -266,12 +232,11 @@ st.set_page_config(
 )
 
 st.title(
-    "⛽ Radar Combustível — Redis Dashboard"
+    "⛽ Radar Combustível Dashboard"
 )
 
 st.caption(
-    "Visualização em tempo real "
-    "MongoDB -> Redis"
+    "Pipeline MongoDB → Redis em tempo real"
 )
 
 auto_refresh = st.sidebar.toggle(
@@ -290,156 +255,97 @@ refresh_seconds = st.sidebar.number_input(
 redis = get_redis()
 
 # =========================================================
-# TOP RANKINGS
+# FILTROS
 # =========================================================
 
-col1, col2 = st.columns(2)
+st.sidebar.header("Filtros")
 
-# ---------------------------------------------------------
-# TOP AVALIADOS
-# ---------------------------------------------------------
+bairro = st.sidebar.selectbox(
+    "Bairro",
+    [
+        "Pinheiros",
+        "Centro",
+        "Moema",
+        "Vila Mariana",
+    ],
+)
 
-with col1:
-
-    st.subheader(
-        "⭐ Top 10 postos mais bem avaliados"
-    )
-
-    postos = top_postos_avaliados(
-        redis,
-        10,
-    )
-
-    df_postos = pd.DataFrame(
-        postos,
-        columns=[
-            "posto_id",
-            "rating",
-        ],
-    )
-
-    if df_postos.empty:
-
-        st.info(
-            "Sem dados em ranking:postos:avaliacao"
-        )
-
-    else:
-
-        df_postos["nome"] = (
-            df_postos["posto_id"]
-            .apply(
-                lambda x: posto_nome(
-                    redis,
-                    x,
-                )
-            )
-        )
-
-        fig = px.bar(
-            df_postos.sort_values(
-                "rating",
-                ascending=True,
-            ),
-            x="rating",
-            y="nome",
-            orientation="h",
-            title="Top avaliações",
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-        )
-
-        st.dataframe(
-            df_postos,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-# ---------------------------------------------------------
-# TOP COMBUSTÍVEIS BUSCADOS
-# ---------------------------------------------------------
-
-with col2:
-
-    st.subheader(
-        "🔎 Combustíveis mais buscados"
-    )
-
-    combustiveis = (
-        combustiveis_mais_buscados(
-            redis,
-            5,
-        )
-    )
-
-    df_comb = pd.DataFrame(
-        combustiveis,
-        columns=[
-            "combustivel",
-            "buscas",
-        ],
-    )
-
-    if df_comb.empty:
-
-        st.info(
-            "Sem dados de buscas."
-        )
-
-    else:
-
-        fig = px.pie(
-            df_comb,
-            names="combustivel",
-            values="buscas",
-            title="Distribuição de buscas",
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-        )
-
-        st.dataframe(
-            df_comb,
-            use_container_width=True,
-            hide_index=True,
-        )
+combustivel = st.sidebar.selectbox(
+    "Combustível",
+    [
+        "gasolina_comum",
+        "etanol",
+        "diesel",
+    ],
+)
 
 # =========================================================
-# GASOLINA MAIS BARATA
+# KPI
+# =========================================================
+
+col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+
+try:
+
+    total_postos = redis.dbsize()
+
+except:
+
+    total_postos = 0
+
+col_kpi1.metric(
+    "Objetos Redis",
+    total_postos,
+)
+
+col_kpi2.metric(
+    "Bairro selecionado",
+    bairro,
+)
+
+col_kpi3.metric(
+    "Combustível",
+    combustivel,
+)
+
+col_kpi4.metric(
+    "Atualização",
+    "Tempo real",
+)
+
+# =========================================================
+# 1. POSTOS MAIS BARATOS
 # =========================================================
 
 st.subheader(
-    "⛽ Top 10 gasolina comum mais barata"
+    "⛽ Postos com menor preço por região"
 )
 
-gasolina = gasolina_mais_barata(
+baratos = postos_mais_baratos(
     redis,
+    combustivel,
+    bairro,
     10,
 )
 
-df_gas = pd.DataFrame(
-    gasolina,
+df_baratos = pd.DataFrame(
+    baratos,
     columns=[
         "posto_id",
         "preco",
     ],
 )
 
-if df_gas.empty:
+if df_baratos.empty:
 
     st.info(
-        "Sem ranking de gasolina."
+        "Sem dados para ranking de preços."
     )
 
 else:
 
-    df_gas["posto"] = (
-        df_gas["posto_id"]
+    df_baratos["posto"] = (
+        df_baratos["posto_id"]
         .apply(
             lambda x: posto_nome(
                 redis,
@@ -448,10 +354,10 @@ else:
         )
     )
 
-    df_gas["cidade"] = (
-        df_gas["posto_id"]
+    df_baratos["bairro"] = (
+        df_baratos["posto_id"]
         .apply(
-            lambda x: posto_cidade(
+            lambda x: posto_bairro(
                 redis,
                 x,
             )
@@ -459,14 +365,14 @@ else:
     )
 
     fig = px.bar(
-        df_gas.sort_values(
+        df_baratos.sort_values(
             "preco",
             ascending=False,
         ),
         x="preco",
         y="posto",
         orientation="h",
-        title="Menores preços gasolina",
+        title="Menores preços",
     )
 
     st.plotly_chart(
@@ -475,148 +381,199 @@ else:
     )
 
     st.dataframe(
-        df_gas,
+        df_baratos,
         use_container_width=True,
         hide_index=True,
     )
 
 # =========================================================
-# TOP POSTOS REDISEARCH
+# 2. COMBUSTÍVEIS EM ALTA
 # =========================================================
 
 st.subheader(
-    "🏆 Top postos via RediSearch"
+    "🔥 Combustíveis em alta"
 )
 
-try:
+alta = combustiveis_em_alta(
+    redis,
+    5,
+)
 
-    rated = top_rated_postos(
-        redis,
-        10,
+df_alta = pd.DataFrame(
+    alta,
+    columns=[
+        "combustivel",
+        "buscas",
+    ],
+)
+
+if df_alta.empty:
+
+    st.info(
+        "Sem dados de buscas."
     )
 
-    rows: List[Dict[str, Any]] = []
+else:
 
-    for doc in rated.docs:
+    fig = px.pie(
+        df_alta,
+        names="combustivel",
+        values="buscas",
+        title="Volume de buscas",
+    )
 
-        rows.append(
-            {
-                "id": doc.id,
-                "nome": getattr(
-                    doc,
-                    "nome_fantasia",
-                    "-",
-                ),
-                "bandeira": getattr(
-                    doc,
-                    "bandeira",
-                    "-",
-                ),
-                "cidade": getattr(
-                    doc,
-                    "cidade",
-                    "-",
-                ),
-                "avaliacao": float(
-                    getattr(
-                        doc,
-                        "media_avaliacao",
-                        0,
-                    )
-                ),
-                "gasolina": float(
-                    getattr(
-                        doc,
-                        "gasolina_comum",
-                        0,
-                    )
-                ),
-            }
-        )
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+    )
 
-    df_rated = pd.DataFrame(rows)
-
-    if df_rated.empty:
-
-        st.info(
-            "Sem dados no idx:postos"
-        )
-
-    else:
-
-        fig = px.bar(
-            df_rated.sort_values(
-                "avaliacao",
-                ascending=True,
-            ),
-            x="avaliacao",
-            y="nome",
-            orientation="h",
-            title="Top avaliações",
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-        )
-
-        st.dataframe(
-            df_rated,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-except Exception as exc:
-
-    st.error(
-        f"Falha RediSearch: {exc}"
+    st.dataframe(
+        df_alta,
+        use_container_width=True,
+        hide_index=True,
     )
 
 # =========================================================
-# BUSCA DINÂMICA
+# 3. BAIRROS MAIS BUSCADOS
 # =========================================================
 
 st.subheader(
-    "🔍 Busca dinâmica de postos"
+    "📍 Bairros com maior volume de buscas"
 )
 
-f1, f2, f3, f4, f5 = st.columns(5)
+bairros = bairros_mais_buscados(
+    redis,
+    10,
+)
+
+df_bairros = pd.DataFrame(
+    bairros,
+    columns=[
+        "bairro",
+        "buscas",
+    ],
+)
+
+if df_bairros.empty:
+
+    st.info(
+        "Sem dados de bairros."
+    )
+
+else:
+
+    fig = px.bar(
+        df_bairros.sort_values(
+            "buscas",
+            ascending=True,
+        ),
+        x="buscas",
+        y="bairro",
+        orientation="h",
+        title="Volume de buscas por bairro",
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+    )
+
+    st.dataframe(
+        df_bairros,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+# =========================================================
+# 4. MAIOR VARIAÇÃO DE PREÇO
+# =========================================================
+
+st.subheader(
+    "📈 Postos com maior variação recente"
+)
+
+variacoes = maior_variacao_preco(
+    redis,
+    combustivel,
+    10,
+)
+
+df_var = pd.DataFrame(
+    variacoes,
+    columns=[
+        "posto_id",
+        "variacao",
+    ],
+)
+
+if df_var.empty:
+
+    st.info(
+        "Sem dados de variação."
+    )
+
+else:
+
+    df_var["posto"] = (
+        df_var["posto_id"]
+        .apply(
+            lambda x: posto_nome(
+                redis,
+                x,
+            )
+        )
+    )
+
+    fig = px.bar(
+        df_var.sort_values(
+            "variacao",
+            ascending=True,
+        ),
+        x="variacao",
+        y="posto",
+        orientation="h",
+        title="Maior variação recente",
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+    )
+
+    st.dataframe(
+        df_var,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+# =========================================================
+# 5. CONSULTAS EM TEMPO REAL
+# =========================================================
+
+st.subheader(
+    "⚡ Consulta dinâmica em tempo real"
+)
+
+f1, f2, f3 = st.columns(3)
 
 with f1:
 
-    bandeira_filter = st.text_input(
-        "Bandeira",
-        value="Ipiranga",
+    bairro_filter = st.text_input(
+        "Bairro",
+        value=bairro,
     )
 
 with f2:
 
-    estado_filter = st.text_input(
-        "Estado",
-        value="SP",
-    )
-
-with f3:
-
-    min_rating_filter = st.slider(
-        "Nota mínima",
-        min_value=0.0,
-        max_value=5.0,
-        value=4.0,
-        step=0.1,
-    )
-
-with f4:
-
-    gasolina_filter = st.slider(
-        "Gasolina máxima",
+    preco_filter = st.slider(
+        "Preço máximo",
         min_value=0.0,
         max_value=10.0,
         value=6.0,
         step=0.1,
     )
 
-with f5:
+with f3:
 
     limit_filter = st.number_input(
         "Limite",
@@ -630,14 +587,12 @@ try:
 
     result = search_postos(
         redis,
-        bandeira_filter,
-        estado_filter,
-        float(min_rating_filter),
-        float(gasolina_filter),
+        bairro_filter,
+        float(preco_filter),
         int(limit_filter),
     )
 
-    rows = []
+    rows: List[Dict[str, Any]] = []
 
     for doc in result.docs:
 
@@ -649,19 +604,14 @@ try:
                     "nome_fantasia",
                     "-",
                 ),
-                "bandeira": getattr(
+                "bairro": getattr(
                     doc,
-                    "bandeira",
+                    "bairro",
                     "-",
                 ),
                 "cidade": getattr(
                     doc,
                     "cidade",
-                    "-",
-                ),
-                "avaliacao": getattr(
-                    doc,
-                    "media_avaliacao",
                     "-",
                 ),
                 "gasolina": getattr(
@@ -683,7 +633,7 @@ try:
     else:
 
         st.caption(
-            f"{result.total} resultado(s)."
+            f"{result.total} resultado(s)"
         )
 
         st.dataframe(
@@ -695,15 +645,15 @@ try:
 except Exception as exc:
 
     st.error(
-        f"Falha na busca: {exc}"
+        f"Falha na busca dinâmica: {exc}"
     )
 
 # =========================================================
-# TIMESERIES
+# 6. SÉRIE TEMPORAL
 # =========================================================
 
 st.subheader(
-    "📈 Série temporal de preços"
+    "📊 Evolução temporal de preços"
 )
 
 posto_id = st.text_input(
@@ -716,13 +666,13 @@ try:
     series = price_series(
         redis,
         posto_id,
+        combustivel,
     )
 
     if not series:
 
         st.info(
-            f"Sem dados para "
-            f"ts:posto:{posto_id}:price_updates"
+            "Sem dados de série temporal."
         )
 
     else:
@@ -750,7 +700,8 @@ try:
             y="preco",
             markers=True,
             title=(
-                f"Posto {posto_id}"
+                f"Evolução de preços "
+                f"{posto_id}"
             ),
         )
 
@@ -760,7 +711,7 @@ try:
         )
 
         st.dataframe(
-            df_series.tail(15),
+            df_series.tail(20),
             use_container_width=True,
             hide_index=True,
         )
@@ -768,7 +719,7 @@ try:
 except Exception as exc:
 
     st.error(
-        f"Falha na TimeSeries: {exc}"
+        f"Falha na série temporal: {exc}"
     )
 
 # =========================================================
