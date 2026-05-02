@@ -3,7 +3,7 @@ from typing import List, Tuple
 from redis import Redis
 from redis.commands.search.query import NumericFilter, Query
 
-from pipeline.config import REDIS_HOST, REDIS_PORT
+from config import REDIS_HOST, REDIS_PORT
 
 
 def get_redis() -> Redis:
