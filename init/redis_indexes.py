@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Iterable
+from typing import Dict
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -14,7 +14,6 @@ MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/?directConnection=
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
 DB_NAME = os.getenv('MONGO_DB', 'radar_combustivel')
-
 POSTOS = 'postos'
 LOCALIZACOES = 'localizacoes_postos'
 COMBUSTIVEIS = ('gasolina_comum', 'etanol', 'diesel_s10', 'gnv')
@@ -25,10 +24,18 @@ def normalize(value: str) -> str:
     return str(value or '').strip().lower().replace(' ', '_')
 
 
+def print_block(title: str) -> None:
+    print('\n' + '=' * 80)
+    print(title)
+    print('=' * 80)
+
+
 def load_postos_snapshot() -> Dict[str, dict]:
-    mongo = MongoClient(MONGO_URI)
-    postos = mongo[DB_NAME][POSTOS]
-    localizacoes = mongo[DB_NAME][LOCALIZACOES]
+    print_block('Carregando snapshot do MongoDB')
+    mongo = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+    db = mongo[DB_NAME]
+    postos = db[POSTOS]
+    localizacoes = db[LOCALIZACOES]
 
     local_por_posto = {str(doc['posto_id']): doc for doc in localizacoes.find({})}
     snapshot: Dict[str, dict] = {}
@@ -65,16 +72,8 @@ def load_postos_snapshot() -> Dict[str, dict]:
             'engajamento': 0,
         }
 
+    print(f'[REDIS] Snapshot carregado: {len(snapshot)} postos.')
     return snapshot
-
-
-def ensure_geo(redis: Redis, snapshot: Dict[str, dict]) -> None:
-    for posto_id, item in snapshot.items():
-        lon = item['longitude']
-        lat = item['latitude']
-        if lon == 0 and lat == 0:
-            continue
-        redis.execute_command('GEOADD', 'geo:postos', lon, lat, posto_id)
 
 
 def ensure_timeseries(redis: Redis, posto_id: str, combustivel: str) -> None:
@@ -95,6 +94,7 @@ def ensure_timeseries(redis: Redis, posto_id: str, combustivel: str) -> None:
 
 
 def ensure_global_timeseries(redis: Redis) -> None:
+    print_block('Criando séries temporais globais')
     specs = [
         ('ts:buscas:latencia_ms', ('metric', 'latencia_ms', 'scope', 'buscas')),
         ('ts:buscas:resultado_count', ('metric', 'resultado_count', 'scope', 'buscas')),
@@ -104,21 +104,43 @@ def ensure_global_timeseries(redis: Redis) -> None:
             redis.execute_command('TS.CREATE', key, 'RETENTION', RETENTION_MS, 'DUPLICATE_POLICY', 'LAST', 'LABELS', *labels)
         except Exception:
             pass
+    print('[REDIS] Séries globais prontas: ts:buscas:latencia_ms e ts:buscas:resultado_count')
+
+
+def seed_hashes(redis: Redis, snapshot: Dict[str, dict]) -> None:
+    print_block('Gravando hashes dos postos')
+    for posto_id, item in snapshot.items():
+        redis.hset(f'posto:{posto_id}', mapping=item)
+        for combustivel in COMBUSTIVEIS:
+            ensure_timeseries(redis, posto_id, combustivel)
+    print(f'[REDIS] Hashes e séries por combustível criadas para {len(snapshot)} postos.')
+
+
+def ensure_geo(redis: Redis, snapshot: Dict[str, dict]) -> None:
+    print_block('Criando índice GEO')
+    added = 0
+    for posto_id, item in snapshot.items():
+        lon = item['longitude']
+        lat = item['latitude']
+        if lon == 0 and lat == 0:
+            continue
+        redis.execute_command('GEOADD', 'geo:postos', lon, lat, posto_id)
+        added += 1
+    print(f'[REDIS] GEO indexado para {added} postos em geo:postos.')
 
 
 def ensure_ranking_placeholders(redis: Redis, snapshot: Dict[str, dict]) -> None:
+    print_block('Inicializando rankings')
     ufs = sorted({item['estado'] for item in snapshot.values() if item['estado']})
     cidades = sorted({item['cidade'] for item in snapshot.values() if item['cidade']})
 
     for uf in ufs:
         for combustivel in COMBUSTIVEIS:
-            key = f'ranking:preco:{combustivel}:{uf}'
-            redis.zadd(key, {'__seed__': 999999.0}, nx=True)
+            redis.zadd(f'ranking:preco:{combustivel}:{uf}', {'__seed__': 999999.0}, nx=True)
 
     for cidade in cidades:
         for combustivel in COMBUSTIVEIS:
-            key = f'ranking:preco:{combustivel}:{cidade}'
-            redis.zadd(key, {'__seed__': 999999.0}, nx=True)
+            redis.zadd(f'ranking:preco:{combustivel}:{cidade}', {'__seed__': 999999.0}, nx=True)
 
     for combustivel in COMBUSTIVEIS:
         redis.zadd(f'ranking:variacao:{combustivel}', {'__seed__': 0.0}, nx=True)
@@ -126,9 +148,11 @@ def ensure_ranking_placeholders(redis: Redis, snapshot: Dict[str, dict]) -> None
     redis.zadd('ranking:combustivel:buscas', {'__seed__': 0.0}, nx=True)
     redis.zadd('ranking:buscas:cidade', {'__seed__': 0.0}, nx=True)
     redis.zadd('ranking:interacoes:postos', {'__seed__': 0.0}, nx=True)
+    print(f'[REDIS] Rankings iniciais prontos para {len(ufs)} UF(s) e {len(cidades)} cidade(s).')
 
 
 def ensure_search_index(redis: Redis) -> None:
+    print_block('Criando índice RediSearch')
     try:
         redis.ft('idx:postos').dropindex(delete_documents=False)
     except Exception:
@@ -152,51 +176,42 @@ def ensure_search_index(redis: Redis) -> None:
         ],
         definition=IndexDefinition(prefix=['posto:'], index_type=IndexType.HASH),
     )
+    print('[REDIS] Índice idx:postos criado com campos de texto, tags, numéricos e geo.')
 
 
-def seed_hashes(redis: Redis, snapshot: Dict[str, dict]) -> None:
-    for posto_id, item in snapshot.items():
-        redis.hset(f'posto:{posto_id}', mapping=item)
+def cleanup_seeds(redis: Redis, snapshot: Dict[str, dict]) -> None:
+    print_block('Removendo seeds temporários')
+    cleanup_keys = set()
+    for item in snapshot.values():
         for combustivel in COMBUSTIVEIS:
-            ensure_timeseries(redis, posto_id, combustivel)
-
-
-def remove_seed_members(redis: Redis, keys: Iterable[str]) -> None:
-    for key in keys:
+            cleanup_keys.add(f"ranking:preco:{combustivel}:{item['estado']}")
+            cleanup_keys.add(f"ranking:preco:{combustivel}:{item['cidade']}")
+            cleanup_keys.add(f'ranking:variacao:{combustivel}')
+    cleanup_keys.update([
+        'ranking:combustivel:buscas',
+        'ranking:buscas:cidade',
+        'ranking:interacoes:postos',
+    ])
+    for key in cleanup_keys:
         try:
             redis.zrem(key, '__seed__')
         except Exception:
             pass
+    print('[REDIS] Seeds temporários removidos dos rankings.')
 
 
 def main() -> None:
+    print_block('Iniciando bootstrap do Redis para Radar Combustível')
     redis = Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
     snapshot = load_postos_snapshot()
-
     seed_hashes(redis, snapshot)
     ensure_geo(redis, snapshot)
     ensure_global_timeseries(redis)
     ensure_ranking_placeholders(redis, snapshot)
     ensure_search_index(redis)
-
-    cleanup_keys = []
-    for item in snapshot.values():
-        for combustivel in COMBUSTIVEIS:
-            cleanup_keys.append(f"ranking:preco:{combustivel}:{item['estado']}")
-            cleanup_keys.append(f"ranking:preco:{combustivel}:{item['cidade']}")
-            cleanup_keys.append(f'ranking:variacao:{combustivel}')
-    cleanup_keys.extend([
-        'ranking:combustivel:buscas',
-        'ranking:buscas:cidade',
-        'ranking:interacoes:postos',
-    ])
-    remove_seed_members(redis, set(cleanup_keys))
-
-    print(f'[REDIS] Snapshot de postos carregado: {len(snapshot)} hashes posto:*')
-    print('[REDIS] Índice RediSearch criado: idx:postos')
-    print('[REDIS] Estrutura GEO criada: geo:postos')
-    print('[REDIS] TimeSeries criadas por posto/combustível e métricas globais de busca')
-    print('[REDIS] Convenções de rankings inicializadas: preço, variação, buscas e interações')
+    cleanup_seeds(redis, snapshot)
+    print_block('Finalização')
+    print('[REDIS] Snapshot, GEO, TimeSeries, rankings e idx:postos criados com sucesso.')
 
 
 if __name__ == '__main__':
