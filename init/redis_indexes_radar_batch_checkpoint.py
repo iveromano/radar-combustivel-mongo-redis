@@ -50,6 +50,23 @@ def save_checkpoint(next_index: int, last_posto_id: str | None) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def create_timeseries_safe(redis: Redis, key: str, posto_id: str, combustivel: str) -> None:
+    try:
+        redis.execute_command(
+            'TS.CREATE',
+            key,
+            'RETENTION', RETENTION_MS,
+            'DUPLICATE_POLICY', 'LAST',
+            'LABELS',
+            'posto_id', posto_id,
+            'combustivel', combustivel,
+            'metric', 'preco',
+        )
+    except Exception as exc:
+        if 'already exists' not in str(exc).lower():
+            raise
+
+
 def load_postos_snapshot() -> List[Tuple[str, dict]]:
     print_block('Carregando snapshot do MongoDB')
     mongo = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
@@ -134,17 +151,7 @@ def seed_block(redis: Redis, items: List[Tuple[str, dict]], start_idx: int, end_
         last_id = posto_id
         pipe.hset(f'posto:{posto_id}', mapping=item)
         for combustivel in COMBUSTIVEIS:
-            ts = f'ts:posto:{posto_id}:{combustivel}'
-            pipe.execute_command(
-                'TS.CREATE',
-                ts,
-                'RETENTION', RETENTION_MS,
-                'DUPLICATE_POLICY', 'LAST',
-                'LABELS',
-                'posto_id', posto_id,
-                'combustivel', combustivel,
-                'metric', 'preco',
-            )
+            create_timeseries_safe(redis, f'ts:posto:{posto_id}:{combustivel}', posto_id, combustivel)
         lon = item['longitude']
         lat = item['latitude']
         if lon != 0 or lat != 0:
@@ -177,8 +184,9 @@ def ensure_global_timeseries(redis: Redis) -> None:
     ]:
         try:
             redis.execute_command('TS.CREATE', key, 'RETENTION', RETENTION_MS, 'DUPLICATE_POLICY', 'LAST', 'LABELS', *labels)
-        except Exception:
-            pass
+        except Exception as exc:
+            if 'already exists' not in str(exc).lower():
+                raise
 
 
 def init_rankings(redis: Redis, items: List[Tuple[str, dict]]) -> None:
@@ -232,3 +240,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
