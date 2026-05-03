@@ -21,16 +21,20 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-    restart: on-failure
-    command:
-      [
-        "mongosh",
-        "--host",
-        "mongo:27017",
-        "--quiet",
-        "--eval",
-        "try { rs.status() } catch(e) { rs.initiate({_id:'rs0', members:[{_id:0, host:'mongo:27017'}]}) }"
-      ]
+    restart: "no"
+    command: >
+      bash -lc '
+      until mongosh --host mongo:27017 --quiet --eval "db.adminCommand(\"ping\").ok" | grep -q 1; do
+        sleep 2
+      done
+      mongosh --host mongo:27017 --quiet --eval "
+        try {
+          rs.status()
+        } catch(e) {
+          rs.initiate({_id:\"rs0\", members:[{_id:0, host:\"mongo:27017\"}]})
+        }
+      "
+      '
 
   redis:
     image: redis/redis-stack-server:latest
@@ -52,12 +56,19 @@ services:
     working_dir: /workspace
     volumes:
       - ./:/workspace
+    environment:
+      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0&directConnection=true
+      MONGO_DB: radar_combustivel
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      BLOCK_SIZE: 5000
+      CHECKPOINT_FILE: redis_indexes_checkpoint.json
     command: ["bash", "-lc", "pip install -r requirements.txt && sleep infinity"]
     depends_on:
       mongo:
         condition: service_healthy
       mongo-init:
-        condition: service_started
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
