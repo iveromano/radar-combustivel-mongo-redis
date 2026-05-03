@@ -1,4 +1,4 @@
-version: "3.9"
+#version: "3.9"
 
 services:
   mongo:
@@ -22,19 +22,11 @@ services:
       mongo:
         condition: service_healthy
     restart: "no"
-    command: >
-      bash -lc '
-      until mongosh --host mongo:27017 --quiet --eval "db.adminCommand(\"ping\").ok" | grep -q 1; do
-        sleep 2
-      done
-      mongosh --host mongo:27017 --quiet --eval "
-        try {
-          rs.status()
-        } catch(e) {
-          rs.initiate({_id:\"rs0\", members:[{_id:0, host:\"mongo:27017\"}]})
-        }
-      "
-      '
+    command:
+      - sh
+      - -c
+      - |
+        mongosh --host mongo:27017 --quiet --eval "try { rs.status() } catch(e) { rs.initiate({_id:'rs0', members:[{_id:0, host:'mongo:27017'}]}) }"
 
   redis:
     image: redis/redis-stack-server:latest
@@ -61,14 +53,15 @@ services:
       MONGO_DB: radar_combustivel
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_DB: 0
+      POLL_INTERVAL_SECONDS: 2
+      BATCH_SIZE: 500
       BLOCK_SIZE: 5000
       CHECKPOINT_FILE: redis_indexes_checkpoint.json
     command: ["bash", "-lc", "pip install -r requirements.txt && sleep infinity"]
     depends_on:
       mongo:
         condition: service_healthy
-      mongo-init:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
