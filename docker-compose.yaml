@@ -77,9 +77,16 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-    command: ["streamlit", "run", "queries/data-view.py", "--server.address=0.0.0.0"]
+      - MONGO_URI=mongodb://mongo:27017/?replicaSet=rs0
+      - MONGO_DB=radar_combustivel
+    # O comando abaixo instala as bibliotecas necessárias e depois inicia o Streamlit
+    command: >
+      sh -c "pip install --no-cache-dir streamlit pandas redis pymongo python-dotenv && 
+             streamlit run queries/data-view.py --server.address=0.0.0.0"
     depends_on:
       redis:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
 
 volumes:
