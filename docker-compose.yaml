@@ -57,7 +57,7 @@ services:
       REDIS_DB: 0
       POLL_INTERVAL_SECONDS: 2
       BATCH_SIZE: 500
-      BLOCK_SIZE: 5000
+      BLOCK_SIZE: 10000
       CHECKPOINT_FILE: redis_indexes_checkpoint.json
     command: ["bash", "-lc", "pip install -r requirements.txt && sleep infinity"]
     depends_on:
