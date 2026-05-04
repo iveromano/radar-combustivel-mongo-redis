@@ -9,8 +9,8 @@ from redis.commands.search.query import NumericFilter, Query
 from config import REDIS_HOST, REDIS_PORT
 
 # Load .env.local first (for host development), fallback to .env (for Docker)
-load_dotenv(".env.local")
-load_dotenv()
+load_dotenv('.env.local', override=True)
+load_dotenv(override=True)
 
 
 def get_redis() -> Redis:
