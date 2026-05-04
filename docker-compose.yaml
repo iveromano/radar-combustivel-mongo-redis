@@ -66,6 +66,22 @@ services:
       redis:
         condition: service_healthy
 
+dashboard:
+  image: python:3.11-slim
+  container_name: lab-dashboard
+  working_dir: /workspace
+  volumes:
+    - ./:/workspace
+  ports:
+    - "8501:8501"
+  environment:
+    - REDIS_HOST=redis
+    - REDIS_PORT=6379
+  command: ["streamlit", "run", "queries/data-view.py", "--server.address=0.0.0.0"]
+  depends_on:
+    redis:
+      condition: service_healthy
+
 volumes:
   mongo_data:
   redis_data:
