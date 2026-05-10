@@ -298,26 +298,46 @@ with tab_geo:
         "centraliza automaticamente em um posto daquela cidade."
     )
 
-    # Auto-center on the cidade filter when it is set: pick any posto in
-    # the city and use its coordinates as the default. Falls back to
-    # Sao Paulo - Praca da Se when no city is set or none has coords.
-    default_lat, default_lon = -23.5505, -46.6333
+    # Auto-center: tenta achar um posto que case com os filtros do sidebar
+    # (cidade > UF > default Sao Paulo). Permite que combustivel+UF tambem
+    # mude o centro do mapa, nao apenas cidade.
+    default_lat, default_lon = -23.5505, -46.6333  # Sao Paulo - Praca da Se
     auto_msg = ""
-    if cidade:
-        candidates = r.zrange(
-            RedisKeys.rank_preco_cidade(combustivel, cidade), 0, 9
-        ) or []
-        for pid in candidates:
+
+    def _try_pick_center(key: str) -> tuple[float, float] | None:
+        """Pega o primeiro posto do ranking que tenha coords."""
+        for pid in (r.zrange(key, 0, 19) or []):
             meta = r.hgetall(RedisKeys.posto(pid))
             try:
-                default_lat = float(meta["lat"])
-                default_lon = float(meta["lon"])
-                auto_msg = f"Centralizado em {cidade} (posto {meta.get('nome_fantasia') or pid})"
-                break
+                return float(meta["lat"]), float(meta["lon"]), meta.get("nome_fantasia") or pid
             except (KeyError, ValueError):
                 continue
-        if not auto_msg:
-            auto_msg = f"Cidade '{cidade}' nao tem postos com coordenadas indexadas para {combustivel}."
+        return None
+
+    picked = None
+    if cidade:
+        picked = _try_pick_center(RedisKeys.rank_preco_cidade(combustivel, cidade))
+        if picked:
+            auto_msg = f"Centralizado em {cidade}/{uf or '?'} (posto {picked[2]})"
+        else:
+            auto_msg = f"Cidade '{cidade}' nao tem postos com {combustivel}; tentando UF..."
+
+    if not picked and uf:
+        picked = _try_pick_center(RedisKeys.rank_preco_uf(combustivel, uf))
+        if picked:
+            auto_msg = f"Centralizado em {uf} (posto {picked[2]} - sem filtro de cidade)"
+        elif cidade:
+            auto_msg += f" UF '{uf}' tambem nao tem; usando Sao Paulo."
+
+    if not picked and not (uf or cidade):
+        # Sem filtros: use o ranking global do combustivel para mostrar
+        # uma cidade representativa em vez de fixar SP.
+        picked = _try_pick_center(RedisKeys.rank_preco_global(combustivel))
+        if picked:
+            auto_msg = f"Centro automatico (posto {picked[2]} - top {combustivel})"
+
+    if picked:
+        default_lat, default_lon, _ = picked
 
     if auto_msg:
         st.caption(auto_msg)
@@ -325,11 +345,16 @@ with tab_geo:
     col1, col2, col3 = st.columns([1, 1, 1])
     # `key` muda quando o filtro muda, fazendo o Streamlit reiniciar o widget
     # com o novo `value`.
-    geo_key = f"{cidade or 'sp'}|{uf or 'br'}|{combustivel}"
+    geo_key = f"{cidade or '_'}|{uf or '_'}|{combustivel}"
     lat = col1.number_input("Latitude", value=default_lat, format="%.4f", key=f"lat_{geo_key}")
     lon = col2.number_input("Longitude", value=default_lon, format="%.4f", key=f"lon_{geo_key}")
-    default_radius = 25 if cidade else 5
-    raio = col3.slider("Raio (km)", 1, 100, default_radius, key=f"raio_{geo_key}")
+    if cidade:
+        default_radius = 15
+    elif uf:
+        default_radius = 50  # UF inteira -> raio maior por default
+    else:
+        default_radius = 5
+    raio = col3.slider("Raio (km)", 1, 200, default_radius, key=f"raio_{geo_key}")
 
     only_with_fuel = st.checkbox(
         f"Apenas postos com {combustivel} indexado", value=False
