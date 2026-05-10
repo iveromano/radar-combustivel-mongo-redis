@@ -140,6 +140,27 @@ class RedisKeys:
     RANK_BUSCAS_UF = "rank:buscas:uf"
     RANK_BUSCAS_COMBUSTIVEL = "rank:buscas:combustivel"
 
+    # Rankings de buscas com granularidade adicional
+    @staticmethod
+    def rank_buscas_bairro_fuel(combustivel: str) -> str:
+        """Top bairros para um combustivel especifico (membros 'UF|Cidade|Bairro')."""
+        return f"rank:buscas:bairro:{combustivel.lower()}"
+
+    @staticmethod
+    def rank_buscas_cidade_fuel(combustivel: str) -> str:
+        """Top cidades para um combustivel especifico (membros 'UF|Cidade')."""
+        return f"rank:buscas:cidade:{combustivel.lower()}"
+
+    @staticmethod
+    def rank_buscas_fuel_uf(uf: str) -> str:
+        """Combustiveis mais buscados em uma UF."""
+        return f"rank:buscas:fuel:{uf.upper()}"
+
+    @staticmethod
+    def rank_buscas_fuel_uf_cidade(uf: str, cidade: str) -> str:
+        """Combustiveis mais buscados em uma cidade."""
+        return f"rank:buscas:fuel:{uf.upper()}|{cidade}"
+
     # ----- Avaliacoes / interacoes -----
     RANK_POSTOS_RATING = "rank:postos:rating"
     RANK_POSTOS_UTIL = "rank:postos:util"

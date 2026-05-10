@@ -239,7 +239,11 @@ def _handle_evento_preco(r: Redis, doc: Dict[str, Any]) -> None:
 
 
 def _handle_busca(r: Redis, doc: Dict[str, Any]) -> None:
-    """``buscas_usuarios`` -> ranking de buscas + volume + latencia."""
+    """``buscas_usuarios`` -> ranking de buscas + volume + latencia.
+
+    Multi-dimensional: alem do ranking global, criamos rankings combustivel-
+    especificos (para top bairros e cidades por combustivel) e rankings
+    geo-especificos (combustiveis mais buscados em cada UF/cidade)."""
     cidade = doc.get("cidade") or "_"
     estado = (doc.get("estado") or "BR").upper()
     bairro = (doc.get("filtros") or {}).get("bairro") or doc.get("bairro") or "_"
@@ -247,11 +251,25 @@ def _handle_busca(r: Redis, doc: Dict[str, Any]) -> None:
     consultado_em = _to_ms(doc.get("consultado_em"))
     latencia = float(doc.get("latencia_ms") or 0)
 
+    bairro_member = f"{estado}|{cidade}|{bairro}"
+    cidade_member = f"{estado}|{cidade}"
+
     pipe = r.pipeline(transaction=False)
-    pipe.zincrby(RedisKeys.RANK_BUSCAS_BAIRRO, 1, f"{estado}|{cidade}|{bairro}")
-    pipe.zincrby(RedisKeys.RANK_BUSCAS_CIDADE, 1, f"{estado}|{cidade}")
+
+    # --- Rankings GLOBAIS (todos combustiveis / todas regioes) ---
+    pipe.zincrby(RedisKeys.RANK_BUSCAS_BAIRRO, 1, bairro_member)
+    pipe.zincrby(RedisKeys.RANK_BUSCAS_CIDADE, 1, cidade_member)
     pipe.zincrby(RedisKeys.RANK_BUSCAS_UF, 1, estado)
     pipe.zincrby(RedisKeys.RANK_BUSCAS_COMBUSTIVEL, 1, combustivel)
+
+    # --- Top bairros / cidades POR combustivel ---
+    pipe.zincrby(RedisKeys.rank_buscas_bairro_fuel(combustivel), 1, bairro_member)
+    pipe.zincrby(RedisKeys.rank_buscas_cidade_fuel(combustivel), 1, cidade_member)
+
+    # --- Combustiveis mais buscados POR UF e POR cidade ---
+    pipe.zincrby(RedisKeys.rank_buscas_fuel_uf(estado), 1, combustivel)
+    pipe.zincrby(RedisKeys.rank_buscas_fuel_uf_cidade(estado, cidade), 1, combustivel)
+
     pipe.execute()
 
     _ensure_timeseries(r, RedisKeys.TS_BUSCAS_TOTAL, labels={"kind": "buscas_total"})
