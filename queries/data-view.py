@@ -256,10 +256,39 @@ with tab_precos:
 # ===========================================================================
 with tab_geo:
     st.subheader("Postos proximos (GEOSEARCH)")
+
+    # Auto-center on the cidade filter when it is set: pick any posto in
+    # the city and use its coordinates as the default. Falls back to
+    # Sao Paulo - Praca da Se when no city is set or none has coords.
+    default_lat, default_lon = -23.5505, -46.6333
+    auto_msg = ""
+    if cidade:
+        candidates = r.zrange(
+            RedisKeys.rank_preco_cidade(combustivel, cidade), 0, 9
+        ) or []
+        for pid in candidates:
+            meta = r.hgetall(RedisKeys.posto(pid))
+            try:
+                default_lat = float(meta["lat"])
+                default_lon = float(meta["lon"])
+                auto_msg = f"Centralizado em {cidade} (posto {meta.get('nome_fantasia') or pid})"
+                break
+            except (KeyError, ValueError):
+                continue
+        if not auto_msg:
+            auto_msg = f"Cidade '{cidade}' nao tem postos com coordenadas indexadas para {combustivel}."
+
+    if auto_msg:
+        st.caption(auto_msg)
+
     col1, col2, col3 = st.columns([1, 1, 1])
-    lat = col1.number_input("Latitude", value=-23.5505, format="%.4f")
-    lon = col2.number_input("Longitude", value=-46.6333, format="%.4f")
-    raio = col3.slider("Raio (km)", 1, 50, 5)
+    # `key` muda quando o filtro muda, fazendo o Streamlit reiniciar o widget
+    # com o novo `value`.
+    geo_key = f"{cidade or 'sp'}|{uf or 'br'}|{combustivel}"
+    lat = col1.number_input("Latitude", value=default_lat, format="%.4f", key=f"lat_{geo_key}")
+    lon = col2.number_input("Longitude", value=default_lon, format="%.4f", key=f"lon_{geo_key}")
+    default_radius = 25 if cidade else 5
+    raio = col3.slider("Raio (km)", 1, 100, default_radius, key=f"raio_{geo_key}")
 
     only_with_fuel = st.checkbox(
         f"Apenas postos com {combustivel} indexado", value=False
@@ -309,8 +338,31 @@ with tab_geo:
 # 4) Comportamento (buscas)
 # ===========================================================================
 with tab_comp:
-    st.subheader("Top bairros mais buscados")
-    rows = rr.top_buscas_bairros(r, limit=20)
+    # Os rankings de buscas guardam membros como "UF|Cidade|Bairro" e
+    # "UF|Cidade", entao filtramos por prefixo.
+    bairros_prefix = ""
+    if uf and cidade:
+        bairros_prefix = f"{uf}|{cidade}|"
+    elif uf:
+        bairros_prefix = f"{uf}|"
+
+    cidades_prefix = f"{uf}|" if uf else ""
+
+    titulo_filtro = []
+    if uf:
+        titulo_filtro.append(f"UF={uf}")
+    if cidade:
+        titulo_filtro.append(f"cidade={cidade}")
+    sufixo = f" ({', '.join(titulo_filtro)})" if titulo_filtro else " (Brasil)"
+
+    st.subheader(f"Top bairros mais buscados{sufixo}")
+
+    # Buscamos mais para conseguir filtrar localmente sem perder o top.
+    rows_all = rr.top_buscas_bairros(r, limit=500)
+    if bairros_prefix:
+        rows = [(m, s) for m, s in rows_all if m.startswith(bairros_prefix)][:20]
+    else:
+        rows = rows_all[:20]
     df_bairros = pd.DataFrame(rows, columns=["uf|cidade|bairro", "buscas"])
     if not df_bairros.empty:
         fig = px.bar(
@@ -318,22 +370,33 @@ with tab_comp:
             x="buscas",
             y="uf|cidade|bairro",
             orientation="h",
-            title="Top 15 bairros",
+            title=f"Top 15 bairros{sufixo}",
         )
         fig.update_layout(yaxis={"categoryorder": "total ascending"})
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Sem dados de busca ainda.")
+        st.info(
+            "Sem buscas para esse filtro. Tente sem cidade ou em outra UF."
+            if titulo_filtro
+            else "Sem dados de busca ainda."
+        )
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.subheader("Top cidades")
-        rows = rr.top_buscas_cidades(r, limit=15)
+        st.subheader(f"Top cidades{sufixo}")
+        rows_all = rr.top_buscas_cidades(r, limit=300)
+        rows = (
+            [(m, s) for m, s in rows_all if m.startswith(cidades_prefix)][:15]
+            if cidades_prefix
+            else rows_all[:15]
+        )
         df = pd.DataFrame(rows, columns=["uf|cidade", "buscas"])
         if not df.empty:
             st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Sem cidades para esse filtro.")
     with col_b:
-        st.subheader("Combustiveis mais buscados")
+        st.subheader("Combustiveis mais buscados (global)")
         rows = rr.top_buscas_combustivel(r, limit=15)
         df = pd.DataFrame(rows, columns=["combustivel", "buscas"])
         if not df.empty:
@@ -345,9 +408,36 @@ with tab_comp:
 # 5) Avaliacoes & Interacoes
 # ===========================================================================
 with tab_aval:
-    st.subheader("Top postos por avaliacao media")
-    rows = rr.top_postos_rating(r, limit=20)
-    metas = _hydrate_postos([p for p, _ in rows])
+    def _matches_filter(meta: Dict[str, str]) -> bool:
+        """Filtra metas pelo UF/cidade da sidebar."""
+        if uf:
+            estado = (meta.get("estado") or meta.get("uf") or "").upper()
+            if estado != uf.upper():
+                return False
+        if cidade:
+            cid = (meta.get("cidade") or meta.get("municipio") or "").lower()
+            if cidade.lower() not in cid:
+                return False
+        return True
+
+    sufixo_aval = []
+    if uf:
+        sufixo_aval.append(f"UF={uf}")
+    if cidade:
+        sufixo_aval.append(f"cidade={cidade}")
+    sufixo_aval = f" ({', '.join(sufixo_aval)})" if sufixo_aval else " (Brasil)"
+
+    st.subheader(f"Top postos por avaliacao media{sufixo_aval}")
+
+    # Pegamos o ranking global maior e filtramos pelos metadados em memoria.
+    raw_rows = rr.top_postos_rating(r, limit=300)
+    metas = _hydrate_postos([p for p, _ in raw_rows])
+    rows = [
+        (p, m)
+        for p, m in raw_rows
+        if _matches_filter(metas.get(p, {}))
+    ][:20]
+
     df_rating = pd.DataFrame(
         [
             {
@@ -375,23 +465,25 @@ with tab_aval:
 
     col_a, col_b = st.columns(2)
     with col_a:
-        st.subheader("Top check-ins")
-        rows = rr.top_postos_checkins(r, limit=15)
-        metas = _hydrate_postos([p for p, _ in rows])
+        st.subheader(f"Top check-ins{sufixo_aval}")
+        raw = rr.top_postos_checkins(r, limit=300)
+        metas2 = _hydrate_postos([p for p, _ in raw])
+        rows = [(p, v) for p, v in raw if _matches_filter(metas2.get(p, {}))][:15]
         df = pd.DataFrame(
             [
-                {"posto": _format_posto_label(metas.get(p, {})), "check_ins": int(v)}
+                {"posto": _format_posto_label(metas2.get(p, {})), "check_ins": int(v)}
                 for p, v in rows
             ]
         )
         st.dataframe(df, use_container_width=True, hide_index=True)
     with col_b:
-        st.subheader("Top util_count")
-        rows = r.zrevrange(RedisKeys.RANK_POSTOS_UTIL, 0, 14, withscores=True)
-        metas = _hydrate_postos([m for m, _ in rows])
+        st.subheader(f"Top util_count{sufixo_aval}")
+        raw = r.zrevrange(RedisKeys.RANK_POSTOS_UTIL, 0, 299, withscores=True)
+        metas3 = _hydrate_postos([m for m, _ in raw])
+        rows = [(m, v) for m, v in raw if _matches_filter(metas3.get(m, {}))][:15]
         df = pd.DataFrame(
             [
-                {"posto": _format_posto_label(metas.get(m, {})), "util": int(v)}
+                {"posto": _format_posto_label(metas3.get(m, {})), "util": int(v)}
                 for m, v in rows
             ]
         )
