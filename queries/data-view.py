@@ -80,7 +80,42 @@ combustivel = st.sidebar.selectbox("Combustivel", combustiveis, index=0)
 
 ufs = ["", "SP", "RJ", "MG", "PR", "RS", "BA", "PE", "CE", "SC", "GO", "DF"]
 uf = st.sidebar.selectbox("UF (filtro)", ufs, index=0) or None
-cidade = st.sidebar.text_input("Cidade (opcional)") or None
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _list_cidades(_r, fuel: str, uf_filter: str | None) -> list[str]:
+    """Lista cidades reais presentes na base, lendo as chaves de ranking
+    rank:preco:{fuel}:cidade:* e cruzando com o uf via posto:{id}.
+    O resultado fica em cache por 60s."""
+    pattern = f"rank:preco:{fuel.lower()}:cidade:*"
+    cidades = set()
+    sample_per_city = 1
+    for key in _r.scan_iter(match=pattern, count=500):
+        cidade_nome = key.split(":cidade:", 1)[1]
+        if not uf_filter:
+            cidades.add(cidade_nome)
+            continue
+        # confere o UF olhando o(s) primeiro(s) posto(s) da cidade
+        members = _r.zrange(key, 0, sample_per_city - 1)
+        for pid in members:
+            estado = _r.hget(RedisKeys.posto(pid), "estado") or _r.hget(RedisKeys.posto(pid), "uf")
+            if estado and estado.upper() == uf_filter.upper():
+                cidades.add(cidade_nome)
+                break
+    return sorted(cidades)
+
+
+cidades_disponiveis = _list_cidades(r, combustivel, uf)
+opcoes_cidade = [""] + cidades_disponiveis
+cidade = st.sidebar.selectbox(
+    f"Cidade (opcional) - {len(cidades_disponiveis)} disponiveis",
+    opcoes_cidade,
+    index=0,
+) or None
+st.sidebar.caption(
+    "A lista mostra as cidades reais presentes na base "
+    f"para {combustivel}{' em ' + uf if uf else ''}."
+)
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -256,6 +291,12 @@ with tab_precos:
 # ===========================================================================
 with tab_geo:
     st.subheader("Postos proximos (GEOSEARCH)")
+    st.caption(
+        "Esta aba demonstra a estrutura GEO do Redis. A tabela abaixo do mapa "
+        "lista os postos encontrados pelo `GEOSEARCH BYRADIUS` a partir do par "
+        "lat/lon definido. Se voce escolher uma cidade no filtro, o mapa "
+        "centraliza automaticamente em um posto daquela cidade."
+    )
 
     # Auto-center on the cidade filter when it is set: pick any posto in
     # the city and use its coordinates as the default. Falls back to
@@ -338,70 +379,68 @@ with tab_geo:
 # 4) Comportamento (buscas)
 # ===========================================================================
 with tab_comp:
-    # Os rankings de buscas guardam membros como "UF|Cidade|Bairro" e
-    # "UF|Cidade", entao filtramos por prefixo.
-    bairros_prefix = ""
-    if uf and cidade:
-        bairros_prefix = f"{uf}|{cidade}|"
-    elif uf:
-        bairros_prefix = f"{uf}|"
+    # Cada secao reage a um conjunto especifico de filtros, conforme o
+    # escopo do dado:
+    #   * Top bairros          -> combustivel + UF + cidade
+    #   * Top cidades          -> combustivel + UF
+    #   * Combustiveis buscados -> UF + cidade
 
-    cidades_prefix = f"{uf}|" if uf else ""
+    def _build_sufixo(*labels: str) -> str:
+        labels = [l for l in labels if l]
+        return f" ({', '.join(labels)})" if labels else " (Brasil)"
 
-    titulo_filtro = []
-    if uf:
-        titulo_filtro.append(f"UF={uf}")
-    if cidade:
-        titulo_filtro.append(f"cidade={cidade}")
-    sufixo = f" ({', '.join(titulo_filtro)})" if titulo_filtro else " (Brasil)"
+    # ---------- Top bairros (combustivel + UF + cidade) ----------
+    sufixo_bairros = _build_sufixo(
+        f"comb={combustivel}",
+        f"UF={uf}" if uf else "",
+        f"cidade={cidade}" if cidade else "",
+    )
+    st.subheader(f"Top bairros mais buscados{sufixo_bairros}")
 
-    st.subheader(f"Top bairros mais buscados{sufixo}")
-
-    # Buscamos mais para conseguir filtrar localmente sem perder o top.
-    rows_all = rr.top_buscas_bairros(r, limit=500)
-    if bairros_prefix:
-        rows = [(m, s) for m, s in rows_all if m.startswith(bairros_prefix)][:20]
-    else:
-        rows = rows_all[:20]
+    rows = rr.top_bairros_filtered(
+        r, combustivel=combustivel, uf=uf, cidade=cidade, limit=15
+    )
     df_bairros = pd.DataFrame(rows, columns=["uf|cidade|bairro", "buscas"])
     if not df_bairros.empty:
         fig = px.bar(
-            df_bairros.head(15),
+            df_bairros,
             x="buscas",
             y="uf|cidade|bairro",
             orientation="h",
-            title=f"Top 15 bairros{sufixo}",
+            title=f"Top 15 bairros{sufixo_bairros}",
         )
         fig.update_layout(yaxis={"categoryorder": "total ascending"})
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info(
-            "Sem buscas para esse filtro. Tente sem cidade ou em outra UF."
-            if titulo_filtro
-            else "Sem dados de busca ainda."
-        )
+        st.info("Sem buscas para esse filtro. Tente outra cidade ou UF.")
 
+    # ---------- Top cidades (combustivel + UF) ----------
     col_a, col_b = st.columns(2)
     with col_a:
-        st.subheader(f"Top cidades{sufixo}")
-        rows_all = rr.top_buscas_cidades(r, limit=300)
-        rows = (
-            [(m, s) for m, s in rows_all if m.startswith(cidades_prefix)][:15]
-            if cidades_prefix
-            else rows_all[:15]
+        sufixo_cid = _build_sufixo(
+            f"comb={combustivel}", f"UF={uf}" if uf else ""
         )
+        st.subheader(f"Top cidades{sufixo_cid}")
+        rows = rr.top_cidades_filtered(r, combustivel=combustivel, uf=uf, limit=15)
         df = pd.DataFrame(rows, columns=["uf|cidade", "buscas"])
         if not df.empty:
             st.dataframe(df, use_container_width=True, hide_index=True)
         else:
             st.info("Sem cidades para esse filtro.")
+
+    # ---------- Combustiveis mais buscados (UF + cidade) ----------
     with col_b:
-        st.subheader("Combustiveis mais buscados (global)")
-        rows = rr.top_buscas_combustivel(r, limit=15)
+        sufixo_fuel = _build_sufixo(
+            f"UF={uf}" if uf else "", f"cidade={cidade}" if cidade else ""
+        )
+        st.subheader(f"Combustiveis mais buscados{sufixo_fuel}")
+        rows = rr.top_combustiveis_filtered(r, uf=uf, cidade=cidade, limit=15)
         df = pd.DataFrame(rows, columns=["combustivel", "buscas"])
         if not df.empty:
             fig = px.pie(df, values="buscas", names="combustivel", hole=0.4)
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sem dados de combustivel para esse filtro.")
 
 
 # ===========================================================================

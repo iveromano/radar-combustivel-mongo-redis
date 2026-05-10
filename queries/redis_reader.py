@@ -200,6 +200,79 @@ def top_buscas_combustivel(r: redis.Redis, limit: int = 10) -> List[Tuple[str, f
     return [(m, float(s)) for m, s in rows]
 
 
+# ---------------------------------------------------------------------------
+# Buscas filtradas por dimensoes
+# ---------------------------------------------------------------------------
+def top_bairros_filtered(
+    r: redis.Redis,
+    combustivel: Optional[str] = None,
+    uf: Optional[str] = None,
+    cidade: Optional[str] = None,
+    limit: int = 15,
+) -> List[Tuple[str, float]]:
+    """Top bairros por combustivel + UF + cidade.
+
+    O ranking de bairros tem membros 'UF|Cidade|Bairro'. Pegamos um lote
+    grande do ranking adequado (combustivel-specific se houver) e filtramos
+    por prefixo em memoria.
+    """
+    key = (
+        RedisKeys.rank_buscas_bairro_fuel(combustivel)
+        if combustivel
+        else RedisKeys.RANK_BUSCAS_BAIRRO
+    )
+    rows = r.zrevrange(key, 0, 999, withscores=True)
+    if uf and cidade:
+        prefix = f"{uf}|{cidade}|"
+    elif uf:
+        prefix = f"{uf}|"
+    else:
+        prefix = ""
+    filtered = [(m, float(s)) for m, s in rows if not prefix or m.startswith(prefix)]
+    return filtered[:limit]
+
+
+def top_cidades_filtered(
+    r: redis.Redis,
+    combustivel: Optional[str] = None,
+    uf: Optional[str] = None,
+    limit: int = 15,
+) -> List[Tuple[str, float]]:
+    """Top cidades por combustivel + UF (membros 'UF|Cidade')."""
+    key = (
+        RedisKeys.rank_buscas_cidade_fuel(combustivel)
+        if combustivel
+        else RedisKeys.RANK_BUSCAS_CIDADE
+    )
+    rows = r.zrevrange(key, 0, 499, withscores=True)
+    prefix = f"{uf}|" if uf else ""
+    filtered = [(m, float(s)) for m, s in rows if not prefix or m.startswith(prefix)]
+    return filtered[:limit]
+
+
+def top_combustiveis_filtered(
+    r: redis.Redis,
+    uf: Optional[str] = None,
+    cidade: Optional[str] = None,
+    limit: int = 15,
+) -> List[Tuple[str, float]]:
+    """Combustiveis mais buscados em uma UF + cidade.
+
+    Estrategia:
+      * UF + cidade -> rank:buscas:fuel:{UF}|{cidade}
+      * UF apenas    -> rank:buscas:fuel:{UF}
+      * sem filtro    -> RANK_BUSCAS_COMBUSTIVEL (global)
+    """
+    if uf and cidade:
+        key = RedisKeys.rank_buscas_fuel_uf_cidade(uf, cidade)
+    elif uf:
+        key = RedisKeys.rank_buscas_fuel_uf(uf)
+    else:
+        key = RedisKeys.RANK_BUSCAS_COMBUSTIVEL
+    rows = r.zrevrange(key, 0, limit - 1, withscores=True)
+    return [(m, float(s)) for m, s in rows]
+
+
 def buscas_volume(r: redis.Redis, bucket_min: int = 60) -> List[Tuple[int, float]]:
     try:
         rows = r.execute_command(
