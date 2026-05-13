@@ -259,11 +259,13 @@ docker exec -it radar-mongo mongosh
 ## 10. Checklist de validação
 
 - [ ] `docker compose up -d` sobe Mongo (rs0) e Redis Stack sem erros.
+- [ ] `python init/seed.py --drop`popula Mongo (500k docs em 125 cidades reais). 
 - [ ] `python init/redis_indexes.py` cria `idx:postos` sem erro.
 - [ ] `python -m pipeline.mongodb_consumer` roda backfill e abre 5 Change Streams.
 - [ ] `python queries/redis_reader.py` imprime rankings populados.
 - [ ] `streamlit run queries/data-view.py` abre as cinco abas com gráficos.
-- [ ] Inserir um documento novo em `eventos_preco` reflete no dashboard < 5s.
+- [ ] Inserir um documento novo em `eventos_preco` pelo mongoDB reflete no dashboard < 5s e/ou,
+- [ ] `python init/insert_test_avaliacoes.py` insere novas avaliações para um determinado posto isso também reflete no dashboard.  
 
 ---
 
