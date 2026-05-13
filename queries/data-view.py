@@ -140,10 +140,21 @@ def _hydrate_postos(ids: List[str]) -> Dict[str, Dict[str, str]]:
 
 
 def _format_posto_label(meta: Dict[str, str]) -> str:
+    """Rotulo do posto com o _id completo entre colchetes.
+
+    O seed gera muitos postos com o mesmo nome (combinacoes de
+    'Sao/Boa/Santa/Bom' + 'Vista/Esperanca/...' + 'Ltda/ME/EIRELI'),
+    entao incluimos o ObjectId completo para diferenciar postos
+    homonimos e tornar evidente qual posto foi alterado em uma demo
+    de Change Stream.
+    """
     nome = meta.get("nome_fantasia") or meta.get("bandeira") or "Posto"
     cidade = meta.get("cidade") or meta.get("municipio") or ""
     uf_ = meta.get("estado") or meta.get("uf") or ""
-    return f"{nome} ({cidade}/{uf_})" if cidade else nome
+    posto_id = meta.get("posto_id") or ""
+    sufixo = f"  [{posto_id}]" if posto_id else ""
+    base = f"{nome} ({cidade}/{uf_})" if cidade else nome
+    return f"{base}{sufixo}"
 
 
 # ---------------------------------------------------------------------------
