@@ -141,8 +141,14 @@ python -m venv .venv
 # ou: source .venv/bin/activate  # Linux/macOS
 pip install -r requirements.txt
 ```
+### 4.5 Rodar o novo seed 
 
-### 4.5 Criar índices RediSearch
+```bash
+python init/seed.py --drop 
+
+# popula Mongo (500k docs em 125 cidades e coordenadas reais)
+```
+### 4.6 Criar índices RediSearch
 
 ```bash
 python init/redis_indexes.py
