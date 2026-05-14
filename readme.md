@@ -286,6 +286,10 @@ docker exec -it radar-mongo mongosh
 - [ ] Inserir um documento novo em `eventos_preco` pelo mongoDB reflete no dashboard < 5s e/ou,
 - [ ] `python init/insert_test_avaliacoes.py` insere novas avaliações para um determinado posto isso também reflete no dashboard.  
 
+# Observações:
+As rotinas redis_indexes_radar_batch.py e redis_indexes_radar_batch_checkpoint.py não foram utilizadas nesta solução porque o problema no docker 
+que elas resolveriam foi resolvido ajustando as configurações e a forma de execução
+
 ---
 
 ## 11. Referências
