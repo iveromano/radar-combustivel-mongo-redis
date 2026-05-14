@@ -173,9 +173,3 @@ The solution combines both: a **boot-time backfill** ensures the correct state f
 
 ---
 
-## 10. Suggested next steps
-
-- Shard by UF/city on ranking keys if cardinality explodes.
-- Replace average computation via Hash with **RedisJSON + JSON.SET** with CAS expressions.
-- Publish metrics to **Prometheus** and add a Grafana dashboard.
-- Additional RediSearch filters (dynamic radius, price range, sort by rating).
