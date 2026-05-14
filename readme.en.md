@@ -4,8 +4,9 @@
 > Use case: **Radar Combustível Platform** (prices, gas stations, searches, ratings)
 > Based on the `commithouse/lab-streaming-mongo-redis` lab (Restaurant Marketplace), scaled to **500 thousand documents** (100k per collection × 5) anchored in **125 real Brazilian cities**.
 
-📘 Detailed data modeling at [`docs/modeling-radar-combustivel.en.md`](docs/modeling-radar-combustivel.en.md)
-📘 Detailed streaming pipeline at [`docs/streaming-mongo-redis.en.md`](docs/streaming-mongo-redis.en.md)
+Detailed data modeling at [`docs/modeling-radar-combustivel.en.md`](docs/modeling-radar-combustivel.en.md)
+
+Detailed streaming pipeline at [`docs/streaming-mongo-redis.en.md`](docs/streaming-mongo-redis.en.md)
 
 ---
 
