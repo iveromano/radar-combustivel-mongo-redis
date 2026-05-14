@@ -167,10 +167,3 @@ Erros e desconexões são tratados com **backoff exponencial** (1s, 2s, 4s … a
 A solução combina os dois: **um backfill no boot** garante o estado correto para os 100k documentos pré-existentes, e **Change Streams** mantêm o Redis sincronizado com qualquer novo `insert/update/replace`.
 
 ---
-
-## 10. Próximos passos sugeridos
-
-- Sharding por UF/cidade nas chaves de ranking se a cardinalidade explodir.
-- Substituir o cálculo da média via Hash por **RedisJSON + JSON.SET** com expressão CAS.
-- Publicar métricas em **Prometheus** e adicionar dashboard Grafana.
-- Filtros adicionais no RediSearch (raio dinâmico, faixa de preço, ordenação por nota).
