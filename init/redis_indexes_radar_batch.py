@@ -1,3 +1,8 @@
+"""
+Rotina atualmente não utilizada para a solução, ela foi desenvolvida na tentativa de solucionar um problema para rodar via docker, 
+mas conseguimos solucionar ajustando as configurações e a forma de execução.
+"""
+
 import os
 import time
 from typing import Dict
