@@ -1,6 +1,7 @@
 """
-Rotina atualmente não utilizada para a solução, ela foi desenvolvida na tentativa de solucionar um problema para rodar via docker, 
-mas conseguimos solucionar ajustando as configurações e a forma de execução.
+Rotina atualmente não utilizada na solução. Ela foi desenvolvida na tentativa
+de solucionar um problema na execução via Docker, mas o problema foi resolvido
+ajustando as configurações e a forma de execução.
 """
 
 import os
