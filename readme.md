@@ -4,8 +4,9 @@
 > Caso de uso: **Plataforma Radar Combustível** (preços, postos, buscas e avaliações)
 > Baseado no laboratório `commithouse/lab-streaming-mongo-redis` (Marketplace de Restaurantes), adaptado para **500 mil documentos** (100k por coleção × 5) ancorados em **125 cidades brasileiras reais**.
 
-📘 Modelagem detalhada dos dados em [`docs/modelagem-radar-combustivel.md`](docs/modelagem-radar-combustivel.md)
-📘 Pipeline de streaming detalhado em [`docs/streaming-mongo-redis.md`](docs/streaming-mongo-redis.md)
+Modelagem detalhada dos dados em [`docs/modelagem-radar-combustivel.md`](docs/modelagem-radar-combustivel.md)
+
+Pipeline de streaming detalhado em [`docs/streaming-mongo-redis.md`](docs/streaming-mongo-redis.md)
 
 ---
 
