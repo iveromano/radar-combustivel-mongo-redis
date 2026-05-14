@@ -15,17 +15,17 @@ embedding):
 
 ```
 ┌──────────┐                        ┌──────────────────────────┐
-│ postos   │───────1:1──────────────│ localizacoes_postos       │
+│ postos   │───────1:1──────────────│ localizacoes_postos      │
 │          │                        │                          │
-│          │───────1:N──────────────│ eventos_preco             │
+│          │───────1:N──────────────│ eventos_preco            │
 │          │                        │                          │
-│          │───────1:N──────────────│ avaliacoes_interacoes     │
+│          │───────1:N──────────────│ avaliacoes_interacoes    │
 └──────────┘                        └──────────────────────────┘
        ▲                                          ▲
        │                                          │
        │ filtro de localização                    │ filtro de posto
        │                                          │
-┌──────┴──────────────────────────────────────────┴──────┐
+┌──────┴──────────────────────────────────────────┴───────┐
 │              buscas_usuarios                            │
 │  (referência ao geo_centro, cidade, estado, combustivel)│
 └─────────────────────────────────────────────────────────┘
@@ -535,16 +535,3 @@ para descarte gracioso em caso de pressão.
 
 ---
 
-## 8. Evolução futura sugerida
-
-- **Sharding por UF nos rankings de buscas**: se a cardinalidade dos
-  bairros explodir, separar `rank:buscas:bairro:SP`,
-  `rank:buscas:bairro:RJ`, etc.
-- **RedisJSON** para `posto:{id}:rating` com expressão CAS na média,
-  eliminando o passo de recalcular fora do pipeline.
-- **Stream consumer groups** (XADD/XREADGROUP) para distribuir o
-  processamento entre múltiplos consumers paralelos.
-- **Bitmap** para presença horária de cada posto (24×7 = 168 bits por
-  posto) — base para "este posto costuma estar aberto agora?".
-- **HyperLogLog** para estimar usuários únicos por UF/cidade sem
-  guardar todos os UUIDs.
