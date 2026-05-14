@@ -94,7 +94,7 @@ radar-combustivel/
 │   ├── streaming-mongo-redis.md       # Pipeline details (PT)
 │   ├── modeling-radar-combustivel.en.md
 │   ├── streaming-mongo-redis.en.md
-│   └── arquitetura.svg
+│   └── arquitetura_final.png
 ├── init/
 │   ├── seed.py                        # Populate Mongo (500k docs in 125 real cities)
 │   ├── redis_indexes.py               # Create RediSearch index idx:postos
