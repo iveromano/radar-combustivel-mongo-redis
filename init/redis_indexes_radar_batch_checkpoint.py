@@ -1,3 +1,9 @@
+"""
+Rotina atualmente não utilizada na solução. Ela foi desenvolvida como mais uma tentativa de solucionar um problema 
+na execução via Docker colocando um checkpoint para recomeçar de onde havia parado na última execução, mas o problema
+foi resolvido ajustando as configurações e a forma de execução e conseguimos executar até o fim sem paradas.
+"""
+
 import os
 import json
 from typing import Dict, List, Tuple
